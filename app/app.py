@@ -126,15 +126,16 @@ for dispositivo, datos in mqtt_data.items():
             "valor": entrada["value"],
             "dispositivo": dispositivo
         })
-# Si no hay registros, mostramos un mensaje y detenemos la ejecución
-if len(registros) == 0:
+# Si no hay al menos 6 registros, mostramos un mensaje y detenemos la ejecución
+if len(registros) < 6:
     st.info("No hay datos disponibles aún.")
 else:
     # Convertimos a DataFrame
     df_total = pd.DataFrame(registros)
     df_total["ts"] = pd.to_datetime(df_total["ts"])  # Asegura que es datetime
     df_total["ts"] = df_total["ts"].dt.floor("10s")  # Redondea a múltiplos de 15s
-    
+    df_total = df_total.sort_values(by=["ts", "dispositivo"]).reset_index(drop=True)
+
     # st.dataframe(df_total)
     fig = px.area(df_total, x="ts", y="valor", color="dispositivo",
                 labels={"ts": "Hora", "valor": "Potencia (kW)"},
