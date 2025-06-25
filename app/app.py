@@ -10,7 +10,7 @@ import json
 import threading
 import requests
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import deque
 from paho.mqtt.client import Client, MQTTv311, CallbackAPIVersion
 
@@ -30,9 +30,9 @@ device_map = { "zonaalta": "Zona Alta",
                "zonamedia": "Zona Media",
                "zonabaja": "Zona Baja"}
 # Definición de los límites para cada zona
-device_thresholds = {"zonaalta": {"min": 0, "max": 1.5},
-                     "zonamedia": {"min": 0, "max": 1.5},
-                     "zonabaja": {"min": 0, "max": 1.5}}
+device_thresholds = {"zonaalta": {"min": -2, "max": 2},
+                     "zonamedia": {"min": -2, "max": 2},
+                     "zonabaja": {"min": -1.5, "max": 1.5}}
 
 device_names = device_map.keys()
 # Inicializar datos en session_state
@@ -63,6 +63,8 @@ def iniciar_mqtt():
                 )
                 client.on_connect = on_connect
                 client.on_message = on_message
+                client.on_disconnect = on_disconnect
+                # Configurar credenciales
                 client.username_pw_set(username=mqtt_user, password=mqtt_pass)
                 # Configuración TLS (opcional)
                 client.tls_set(cert_reqs=ssl.CERT_NONE)
@@ -71,14 +73,28 @@ def iniciar_mqtt():
                 client.connect(mqtt_broker, mqtt_port)
                 time.sleep(1)  # Esperar unos segundos para asegurar la conexión
                 client.subscribe(mqtt_topic)
-                client.loop_forever()
+                client.loop_forever()  # Iniciar el bucle de red en segundo plano
+                # start_time = datetime.now()
+                # max_duration = timedelta(minutes=1)
+
+                # Ejecutar el bucle de red sin bloquear indefinidamente
+                # while True:
+                #     client.loop(timeout=1.0)  # Bucle no bloqueante
+                #     elapsed = datetime.now() - start_time
+                #     print(elapsed)
+                #     if elapsed >= max_duration:
+                #         print("⏱️ Tiempo máximo de conexión alcanzado (24h). Desconectando...")
+                #         client.disconnect()
+                #         st.session_state["mqtt_thread"] = None
+                #         break
+                #     time.sleep(1)
             except Exception as e:
                 print(f"Error al conectar al broker MQTT: {e}")
                 return
             
         t = threading.Thread(target=mqtt_loop, daemon=True)
         t.start()
-        st.session_state["mqtt_thread"] = t  
+        st.session_state["mqtt_thread"] = t
 
 # Callback al conectar
 def on_connect(client, userdata, flags, rc, properties=None):
@@ -86,6 +102,9 @@ def on_connect(client, userdata, flags, rc, properties=None):
         print("✅ Conectado al broker MQTT")
     else:
         print(f"❌ Error al conectar. Código: {rc}")
+
+def on_disconnect(client, userdata, flags, rc, properties=None):
+    print("🔌 Desconectado del broker")
 
 # Callback al recibir un mensaje
 def on_message(client, userdata, msg):
@@ -183,15 +202,25 @@ for col, device_name in zip([col4, col5, col6], device_names):
         # Calcular media y límites
         media = df["value"].mean()
         thresholds = device_thresholds[device_name]
-        min_threshold = media * thresholds["min"]
-        max_threshold = media * thresholds["max"]
+        min_threshold = media + media * thresholds["min"]
+        max_threshold = media + media * thresholds["max"]
+        
+        if device_name == "zonaalta":
+            max_threshold = min(max_threshold, 7.5)  # No puede superar 7.5 kW  # No puede ser mayor que 7.5kW
+        elif device_name == "zonamedia":
+            max_threshold = min(max_threshold, 5)  # No puede ser mayor que 5kW
+            min_threshold = max(min_threshold, 0)  # No puede ser menor que 0 kW
+        elif device_name == "zonabaja":
+            min_threshold = max(min_threshold, 0)  # No puede ser menor que 0 kW
         # Añadir valores
         fig = px.line(df, x="ts", y="value", labels={"ts": "Hora", "value": "Potencia (kW)"}, title=f"{device_map[device_name]}")
         fig.update_layout(xaxis=dict(tickformat="%H:%M:%S"))
+        annotation_text_min = f"{min_threshold:.2f} kW"
+        annotation_text_max = f"{max_threshold:.2f} kW"
         # Añadir líneas de referencia
         fig.add_hline(y=media, line_dash="dot", line_color="red", annotation_text="Media", annotation_position="top left")
-        fig.add_hline(y=min_threshold, line_dash="dash", line_color="orange", annotation_text="-50%", annotation_position="bottom left")
-        fig.add_hline(y=max_threshold, line_dash="dash", line_color="orange", annotation_text="+50%", annotation_position="top left")
+        fig.add_hline(y=min_threshold, line_dash="dash", line_color="orange", annotation_text=annotation_text_min, annotation_position="bottom left")
+        fig.add_hline(y=max_threshold, line_dash="dash", line_color="orange", annotation_text=annotation_text_max, annotation_position="top left")
 
         col.plotly_chart(fig, use_container_width=True)
 
